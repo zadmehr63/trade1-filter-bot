@@ -1,10 +1,3 @@
-"""
-ربات تلگرام «فیلتر چارت» برای گروه و کانال ترید
-python-telegram-bot >= 20
-
-این نسخه برای اجرا روی سرویس‌هایی مثل Render آماده شده است (دارای وب‌سرور داخلی).
-"""
-
 import html
 import logging
 import os
@@ -663,22 +656,34 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error("خطا در پردازش آپدیت", exc_info=context.error)
 
 # ----------------------------------------------------------------------------
-# اجرای ربات و وب‌سرور (برای Render)
+# تنظیمات وب‌سرور و اجرای اصلی
 # ----------------------------------------------------------------------------
 
-def run_bot():
+web_app = Flask(__name__)
+
+@web_app.route('/')
+def health():
+    return "Bot is running", 200
+
+def run_web_server():
+    # پورت اختصاص داده شده توسط Render را می‌گیرد (پیش‌فرض 8080)
+    port = int(os.environ.get("PORT", 8080))
+    web_app.run(host="0.0.0.0", port=port)
+
+def main():
     token = os.environ.get("BOT_TOKEN", "").strip()
     if not token:
         logger.error("متغیر محیطی BOT_TOKEN تنظیم نشده است.")
         return
 
     init_db()
-    if STATS_ADMIN_IDS:
-        logger.info("آمار فقط برای %d کاربر مجاز است", len(STATS_ADMIN_IDS))
-    else:
-        logger.warning("STATS_ADMIN_IDS تنظیم نشده؛ آمار گروه برای همه‌ی اعضا باز است.")
-
+    
+    logger.info("ربات در حال اجراست...")
+    
+    # ساخت اپلیکیشن ربات
     app = Application.builder().token(token).build()
+    
+    # اضافه کردن هندلرها
     app.add_handler(CommandHandler("myid", on_myid))
     app.add_handler(CommandHandler(["stats", "daily", "weekly", "monthly"], on_stats_command))
     app.add_handler(
@@ -702,24 +707,17 @@ def run_bot():
     app.add_handler(CallbackQueryHandler(on_nop, pattern=r"^nop$"))
     app.add_error_handler(on_error)
 
-    logger.info("ربات در حال اجراست...")
+    # شروع به کار ربات (این خط تا زمانی که ربات خاموش نشود اجرا می‌ماند)
     app.run_polling(
         allowed_updates=["message", "channel_post", "callback_query"],
         bootstrap_retries=-1,
     )
 
-# تنظیمات وب‌سرور Flask برای Render
-web_app = Flask(__name__)
-
-@web_app.route('/')
-def health():
-    return "Bot is running", 200
-
 if __name__ == "__main__":
-    # اجرای ربات در پس‌زمینه
-    bot_thread = Thread(target=run_bot)
-    bot_thread.start()
+    # ۱. ابتدا وب‌سرور را در پس‌زمینه (Thread) اجرا می‌کنیم تا Render پورت را ببیند
+    web_thread = Thread(target=run_web_server)
+    web_thread.daemon = True
+    web_thread.start()
 
-    # اجرای وب‌سرور روی پورتی که Render اختصاص می‌دهد
-    port = int(os.environ.get("PORT", 8080))
-    web_app.run(host="0.0.0.0", port=port)
+    # ۲. سپس ربات تلگرام را در نخ اصلی اجرا می‌کنیم
+    main()
