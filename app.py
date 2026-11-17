@@ -1,3 +1,10 @@
+"""
+ربات تلگرام «فیلتر چارت» برای گروه و کانال ترید
+python-telegram-bot >= 20
+
+این نسخه برای اجرا روی سرویس‌هایی مثل Render آماده شده است (دارای وب‌سرور داخلی).
+"""
+
 import html
 import logging
 import os
@@ -200,28 +207,38 @@ def build_keyboard(owner_id: int, mask: int) -> InlineKeyboardMarkup:
 def build_summary(mask: int) -> str:
     liq = bool(mask & LIQ_BIT)
     kind_text = LIQ_TEXT if liq else QM_TEXT
-    pos_head = f"✅ {LIQ_ITEMS_WORD} موجود:" if liq else "✅ فیلترهای مثبت:"
-    neg_head = f"❌ {LIQ_ITEMS_WORD} ناموجود:" if liq else "❌ فیلترهای منفی:"
-    count_word = f"تعداد {LIQ_ITEMS_WORD} موجود" if liq else "تعداد فیلترهای مثبت"
 
     lines = [f"📌 نوع: <b>{html.escape(kind_text)}</b>", ""]
+
     for title, group in active_groups(mask):
         positives = [f["name"] for f in group if is_on(mask, f["id"])]
-        negatives = [f["name"] for f in group if not is_on(mask, f["id"])]
-
-        def block(head: str, items: list) -> list:
-            out = [head]
-            out += [f"• {html.escape(n)}" for n in items] or ["• —"]
-            return out
 
         if title:
             lines.append(f"▫️ <b>{html.escape(title)}</b>")
-        lines += block(pos_head, positives)
-        lines.append("")
-        lines += block(neg_head, negatives)
-        lines.append("")
-        lines.append(f"{count_word}: {fa(len(positives))} از {fa(len(group))}")
-        lines.append("")
+
+        if liq:
+            # در تامین نقدینگی فقط گزینه‌های انتخاب‌شده نمایش داده می‌شوند
+            if positives:
+                for name in positives:
+                    lines.append(f"• {html.escape(name)}")
+            else:
+                lines.append("• —")
+            lines.append("")
+        else:
+            # در QM هم مثبت و هم منفی + تعداد نمایش داده می‌شود
+            negatives = [f["name"] for f in group if not is_on(mask, f["id"])]
+            pos_head = "✅ فیلترهای مثبت:"
+            neg_head = "❌ فیلترهای منفی:"
+
+            lines.append(pos_head)
+            lines += [f"• {html.escape(n)}" for n in positives] or ["• —"]
+            lines.append("")
+            lines.append(neg_head)
+            lines += [f"• {html.escape(n)}" for n in negatives] or ["• —"]
+            lines.append("")
+            lines.append(f"تعداد فیلترهای مثبت: {fa(len(positives))} از {fa(len(group))}")
+            lines.append("")
+
     return "\n".join(lines).rstrip()
 
 
@@ -656,34 +673,22 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error("خطا در پردازش آپدیت", exc_info=context.error)
 
 # ----------------------------------------------------------------------------
-# تنظیمات وب‌سرور و اجرای اصلی
+# اجرای ربات و وب‌سرور (برای Render)
 # ----------------------------------------------------------------------------
 
-web_app = Flask(__name__)
-
-@web_app.route('/')
-def health():
-    return "Bot is running", 200
-
-def run_web_server():
-    # پورت اختصاص داده شده توسط Render را می‌گیرد (پیش‌فرض 8080)
-    port = int(os.environ.get("PORT", 8080))
-    web_app.run(host="0.0.0.0", port=port)
-
-def main():
+def run_bot():
     token = os.environ.get("BOT_TOKEN", "").strip()
     if not token:
         logger.error("متغیر محیطی BOT_TOKEN تنظیم نشده است.")
         return
 
     init_db()
-    
-    logger.info("ربات در حال اجراست...")
-    
-    # ساخت اپلیکیشن ربات
+    if STATS_ADMIN_IDS:
+        logger.info("آمار فقط برای %d کاربر مجاز است", len(STATS_ADMIN_IDS))
+    else:
+        logger.warning("STATS_ADMIN_IDS تنظیم نشده؛ آمار گروه برای همه‌ی اعضا باز است.")
+
     app = Application.builder().token(token).build()
-    
-    # اضافه کردن هندلرها
     app.add_handler(CommandHandler("myid", on_myid))
     app.add_handler(CommandHandler(["stats", "daily", "weekly", "monthly"], on_stats_command))
     app.add_handler(
@@ -707,17 +712,24 @@ def main():
     app.add_handler(CallbackQueryHandler(on_nop, pattern=r"^nop$"))
     app.add_error_handler(on_error)
 
-    # شروع به کار ربات (این خط تا زمانی که ربات خاموش نشود اجرا می‌ماند)
+    logger.info("ربات در حال اجراست...")
     app.run_polling(
         allowed_updates=["message", "channel_post", "callback_query"],
         bootstrap_retries=-1,
     )
 
-if __name__ == "__main__":
-    # ۱. ابتدا وب‌سرور را در پس‌زمینه (Thread) اجرا می‌کنیم تا Render پورت را ببیند
-    web_thread = Thread(target=run_web_server)
-    web_thread.daemon = True
-    web_thread.start()
+# تنظیمات وب‌سرور Flask برای Render
+web_app = Flask(__name__)
 
-    # ۲. سپس ربات تلگرام را در نخ اصلی اجرا می‌کنیم
-    main()
+@web_app.route('/')
+def health():
+    return "Bot is running", 200
+
+if __name__ == "__main__":
+    # اجرای ربات در پس‌زمینه
+    bot_thread = Thread(target=run_bot)
+    bot_thread.start()
+
+    # اجرای وب‌سرور روی پورتی که Render اختصاص می‌دهد
+    port = int(os.environ.get("PORT", 8080))
+    web_app.run(host="0.0.0.0", port=port)
