@@ -725,11 +725,14 @@ web_app = Flask(__name__)
 def health():
     return "Bot is running", 200
 
-if __name__ == "__main__":
-    # اجرای ربات در پس‌زمینه
-    bot_thread = Thread(target=run_bot)
-    bot_thread.start()
-
-    # اجرای وب‌سرور روی پورتی که Render اختصاص می‌دهد
+def run_web():
     port = int(os.environ.get("PORT", 8080))
-    web_app.run(host="0.0.0.0", port=port)
+    web_app.run(host="0.0.0.0", port=port, use_reloader=False)
+
+if __name__ == "__main__":
+    # Flask را در پس‌زمینه اجرا می‌کنیم
+    web_thread = Thread(target=run_web, daemon=True)
+    web_thread.start()
+
+    # ربات باید در main thread اجرا شود (برای signal handlers)
+    run_bot()
